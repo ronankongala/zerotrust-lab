@@ -17,6 +17,11 @@ federated single sign-on against the same realm.
 | `mock-docs`, `mock-dashboard` | SAML service providers | `localhost:9001`, `localhost:9002` |
 
 `SETUP.md` has the commands to bring the stack up and reproduce everything below.
+Once the stack is running, `./verify.sh` re-runs the core checks (services up,
+plaintext refused, OIDC enforcement, mTLS, the Rego tests, a live OPA allow and
+deny, and a Vault credential used inside its TTL) in one pass, printing a
+`PASS` or `FAIL` line per check and exiting non-zero if any fails. See
+`SETUP.md` §8.
 
 ## Screenshots
 

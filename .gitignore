@@ -1,4 +1,4 @@
-# Secrets — the gateway client secret is printed by keycloak-setup.py and is
+# Secrets: the gateway client secret is printed by keycloak-setup.py and is
 # specific to each fresh realm provision, so it belongs in a local .env only.
 .env
 .env.*

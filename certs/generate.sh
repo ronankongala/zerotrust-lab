@@ -3,8 +3,9 @@
 # Regenerates the lab's TLS material: a self-signed CA plus a certificate for
 # each of the three mutually-authenticating services.
 #
-# certs/ is gitignored — the private keys are not meant to leave the machine
-# that made them — so a fresh clone has no certificates at all and has to run
+# certs/ is gitignored, because the private keys are not meant to leave the
+# machine that made them, so a fresh clone has no certificates at all and has
+# to run
 # this once before `docker compose up`:
 #
 #     ./certs/generate.sh

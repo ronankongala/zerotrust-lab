@@ -239,7 +239,7 @@ def mint_delete_credential():
 
     AppRole rather than userpass because the caller is a service: role_id is the
     public identifier, secret_id the proof, and the login is unauthenticated by
-    design. Note what the gateway does *not* hold — no root token, no standing
+    design. Note what the gateway does *not* hold: no root token, no standing
     Vault privilege it could lend to a request. All it can do is buy itself a
     20-second credential that the role's TTL kills on its own.
     """
@@ -298,7 +298,7 @@ def verify_delete_credential(credential):
     data = body["data"]
 
     # A live token is not automatically a *delete* token. Without this check the
-    # root token — or any other credential in the lab — would sail through.
+    # root token, or any other credential in the lab, would sail through.
     if DELETE_POLICY not in data.get("policies", []):
         raise CredentialRejected(
             "vault_credential_out_of_scope",
@@ -397,7 +397,7 @@ def mint_delete_credential_route():
     """Hand a manager a credential good for the next ~20 seconds.
 
     Guarded by the same decorator as everything else, so OPA decides who may
-    ask — the policy grants this path to the manager role only. A user who
+    ask, and the policy grants this path to the manager role only. A user who
     cannot delete orders cannot mint the credential that permits it either.
     """
     subject = request.token_claims.get("preferred_username")
@@ -441,7 +441,7 @@ def orders_delete():
         response = upstream.delete(f"{ORDERS_URL}/orders/{order_id}", timeout=TIMEOUT)
         return jsonify(
             deleted_by=request.token_claims.get("preferred_username"),
-            # Seconds the credential had left when it was spent — the number
+            # Seconds the credential had left when it was spent, the number
             # that makes the expiry demo legible.
             credential_ttl_remaining=request.vault_credential.get("ttl"),
             orders={"status": response.status_code, "data": response.json()},

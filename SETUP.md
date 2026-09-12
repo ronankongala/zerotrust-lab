@@ -3,7 +3,7 @@
 ## 1. Start the stack
 
 The services authenticate each other with mutual TLS, and `certs/` is **not in the
-repository** — the private keys are deliberately gitignored, so a fresh clone has
+repository**, because the private keys are deliberately gitignored, so a fresh clone has
 none of that material and the stack cannot come up without it. Generate it first:
 
 ```bash
@@ -14,7 +14,7 @@ That mints the lab CA (`CN=ZeroTrustLab-CA`) and a 4096-bit key and certificate 
 `gateway`, `orders` and `inventory`, each carrying the `subjectAltName` its compose
 hostname is verified against. Re-running the script leaves existing certificates
 alone, so it is safe to repeat; `--force` discards the CA and mints a new one, which
-invalidates every certificate under it — restart the stack afterwards
+invalidates every certificate under it, so restart the stack afterwards
 (`docker compose restart gateway orders inventory`) or the containers keep serving
 their old identities and every handshake fails verification.
 
@@ -38,7 +38,7 @@ to finish before it starts.
 
 `docker compose up` starts Keycloak with an **empty** realm list. The compose file
 runs it in dev mode (`start-dev`), where realm configuration lives only in the
-`keycloak-data` volume — it is not built from `zerotrust-lab-realm-export.json` at
+`keycloak-data` volume, and it is not built from `zerotrust-lab-realm-export.json` at
 boot. Nothing in the repo is read by Keycloak on startup, so the realm has to be
 pushed in over the Admin REST API:
 
@@ -60,11 +60,11 @@ The script waits for Keycloak, authenticates as `admin`/`admin` against the
   attribute (see below);
 - creates the `manager` realm role that the OPA policy looks for;
 - creates two accounts, both with the permanent password `Test1234!`:
-  `testuser` (no extra roles) and `manageruser` (holds `manager`) — one for each
+  `testuser` (no extra roles) and `manageruser` (holds `manager`), one for each
   side of the authorization policy;
 - prints the `gateway-client` secret for your `.env`.
 
-It is idempotent — re-running it skips the realm import and just reconciles the
+It is idempotent: re-running it skips the realm import and just reconciles the
 client settings, roles and users, so it is safe to run whenever you are unsure of
 the state.
 
@@ -88,7 +88,7 @@ regenerated.
 
 The realm survives `docker compose restart` and `docker compose down`, because it
 is stored in the `keycloak-data` volume. Re-run the script after anything that
-discards that volume — `docker compose down -v`, a `docker volume rm`, or a fresh
+discards that volume: `docker compose down -v`, a `docker volume rm`, or a fresh
 clone of this repo on another machine.
 
 Overridable via environment: `KEYCLOAK_URL` (default `http://localhost:8080`),
@@ -123,8 +123,8 @@ Two things about that invocation:
 
 - **A client cert is required.** `gateway`, `orders` and `inventory` all demand one
   signed by `certs/ca.crt`, so the caller needs an identity of its own. The lab has
-  no separate operator cert, so the smoke test reuses `gateway.crt` — any cert the
-  CA signed is accepted.
+  no separate operator cert, so the smoke test reuses `gateway.crt`, since any cert
+  the CA signed is accepted.
 - **`--resolve`, not `localhost`.** `gateway.crt` only carries `DNS:gateway` in its
   SAN, so `https://localhost:8000` fails hostname verification. `--resolve` keeps
   the name the cert claims while still connecting to the published port.
@@ -174,7 +174,7 @@ The three outcomes are deliberately distinguishable at the gateway:
 | ------ | -------------------- | ------------------------------------------------ |
 | 401    | `unauthorized`       | no token, expired, wrong issuer, bad signature    |
 | 403    | `forbidden`          | token is fine, **policy** said no                 |
-| 503    | `policy_unavailable` | OPA unreachable — fail closed, never fail open    |
+| 503    | `policy_unavailable` | OPA unreachable: fail closed, never fail open    |
 
 Section 5 adds a second, independent gate in front of `POST /orders/delete` with
 error codes of its own, so an OPA denial never gets confused with a Vault one.
@@ -191,7 +191,7 @@ POST="-H Content-Type:application/json -d $BODY"
 # testuser: valid token, no manager role -> 403 forbidden
 curl -s $CERT -H "Authorization: Bearer $TOKEN" $POST $GW/orders/delete
 
-# manageruser: the policy allows it — but section 5 puts a second gate here, so
+# manageruser: the policy allows it, but section 5 puts a second gate here, so
 # this is now a 403 vault_credential_required, a different error from the one above
 curl -s $CERT -H "Authorization: Bearer $MANAGER_TOKEN" $POST $GW/orders/delete
 
@@ -213,7 +213,7 @@ curl -s localhost:8181/v1/data/authz/allow -d '{"input":
 
 ### Running the policy unit tests
 
-The policy has its own tests in `policies/authz_test.rego` — seven of them, both
+The policy has its own tests in `policies/authz_test.rego`, seven of them, both
 sides of each rule plus the default: authenticated read allowed, unauthenticated
 read denied, manager delete allowed, non-manager delete denied, manager mint
 allowed, non-manager mint denied, and an unknown path denied by the default. They
@@ -237,7 +237,7 @@ PASS: 7/7
 
 Edit `policies/authz.rego` and the running OPA picks the change up on its own
 (it watches the mounted directory), so the loop is: change the rule, run the
-tests, re-run the curl above — no rebuild of the gateway.
+tests, re-run the curl above, with no rebuild of the gateway.
 
 ## 5. Just-in-time privileged access with Vault
 
@@ -246,7 +246,7 @@ has no opinion about **when**. A manager therefore carries a standing permission
 that a stolen token inherits in full.
 
 HashiCorp Vault adds the missing half. After OPA allows the request, the gateway
-demands a second credential in an `X-Vault-Credential` header — one the caller
+demands a second credential in an `X-Vault-Credential` header, one the caller
 has to mint deliberately, that lives for **20 seconds**, and that Vault issues
 per request. Deleting an order now takes both a role you hold and a credential
 you asked for moments ago.
@@ -268,7 +268,7 @@ stops.
 
 Dev-mode Vault keeps nothing across restarts, so the configuration is applied by
 a one-shot `vault-init` container running `vault/setup.sh` on every
-`docker compose up` — you never run it yourself, and `gateway` blocks on it
+`docker compose up`. You never run it yourself, and `gateway` blocks on it
 (`condition: service_completed_successfully`) so it cannot start before the
 AppRole exists. The script is idempotent, so re-running it against a live Vault
 is safe.
@@ -280,7 +280,7 @@ It creates two things:
 - an **AppRole** named `delete-order` with `token_ttl = token_max_ttl = 20s` and
   `token_no_default_policy=true`.
 
-AppRole rather than userpass because the client is the gateway — a service, not
+AppRole rather than userpass because the client is the gateway, a service, not
 a human. `role_id` is the public "who" and `secret_id` the private proof, the
 same split as an OAuth `client_id`/`client_secret`; both are pinned to fixed
 values so the gateway can be configured from a static compose file.
@@ -288,20 +288,20 @@ values so the gateway can be configured from a static compose file.
 Two details carry most of the security story:
 
 - **The credential can do nothing.** Its one capability is to look itself up. It
-  is not a key to a secret — it is evidence that someone with the manager role
+  is not a key to a secret: it is evidence that someone with the manager role
   asked for permission in the last 20 seconds, and the gateway treats it as
   exactly that.
 - **`token_max_ttl` equals `token_ttl`**, so it cannot be renewed past 20
   seconds. There is no way to hold one open.
 
-The gateway holds no Vault token of its own — no root token, no standing
+The gateway holds no Vault token of its own: no root token, no standing
 privilege it could lend to a request. All it has is the AppRole, and all the
 AppRole buys is a credential that expires on its own.
 
 ### Minting a credential
 
 `GET /admin/mint-delete-credential` goes through the *same* OPA decorator as
-every other route, and the policy grants that path to the `manager` role only —
+every other route, and the policy grants that path to the `manager` role only, so
 a user who may not delete orders may not mint the credential that permits it
 either:
 
@@ -323,8 +323,8 @@ curl -s $CERT -H "Authorization: Bearer $MANAGER_TOKEN" $GW/admin/mint-delete-cr
 On `POST /orders/delete`, once OPA has allowed the request, the gateway calls
 Vault's `auth/token/lookup-self` with the presented credential and requires two
 things: that Vault still recognises it, and that it carries the `delete-order`
-policy. The second check is what stops any *other* live Vault credential — the
-root token included — from standing in for one.
+policy. The second check is what stops any *other* live Vault credential, the
+root token included, from standing in for one.
 
 Expiry is Vault's answer, not a clock comparison in the gateway, so a credential
 that was revoked early fails exactly as fast as one that timed out.
@@ -366,7 +366,7 @@ curl -s $CERT -H "Authorization: Bearer $MANAGER_TOKEN" \
 ```
 
 Nothing about the caller changed between those two requests. The token is the
-same, the manager role is the same, OPA allowed both — only the clock moved.
+same, the manager role is the same, OPA allowed both, and only the clock moved.
 That is the property Vault is adding: *authorization with an expiry date*.
 
 Vault will not say which of expired / revoked / never-issued it was, because it
@@ -380,13 +380,13 @@ guessing which layer refused:
 
 | Status | Body `error`                   | Means                                                        |
 | ------ | ------------------------------ | ------------------------------------------------------------ |
-| 401    | `unauthorized`                 | no/expired/bad OIDC token — never reaches OPA                 |
+| 401    | `unauthorized`                 | no/expired/bad OIDC token, never reaches OPA                 |
 | 403    | `forbidden`                    | **OPA** said no: the identity lacks the `manager` role        |
 | 403    | `vault_credential_required`    | OPA allowed it; no `X-Vault-Credential` header was sent       |
 | 403    | `vault_credential_invalid`     | credential expired, revoked, malformed, or never issued       |
 | 403    | `vault_credential_out_of_scope`| a live Vault token, but not one scoped to `delete-order`      |
-| 503    | `policy_unavailable`           | OPA unreachable — fail closed                                 |
-| 503    | `vault_unavailable`            | Vault unreachable — fail closed                               |
+| 503    | `policy_unavailable`           | OPA unreachable, fail closed                                 |
+| 503    | `vault_unavailable`            | Vault unreachable, fail closed                               |
 
 The ordering is deliberate: OPA runs first, so a non-manager never learns that a
 Vault gate exists. Worth trying by hand:
@@ -426,7 +426,7 @@ vault token lookup "$CRED"                     # ttl counting down, policies
 ```
 
 `vault token lookup` against a credential you just minted, run twice a few
-seconds apart, shows the TTL falling — the clearest view of what the gateway is
+seconds apart, shows the TTL falling, the clearest view of what the gateway is
 checking on every delete.
 
 ## 6. Decision logging
@@ -452,8 +452,8 @@ with `flush=True`, not a logging framework. The record it builds has this shape
 | `policy` | `allow`, `deny`, `error` | the same decorator, around the OPA call |
 | `credential` | `allow`, `deny`, `error`, `issue` | `require_vault_credential`, plus `issue` at the mint route |
 
-A single `POST /orders/delete` by a manager therefore leaves three lines — `token
-allow`, `policy allow`, `credential allow` — and a refusal leaves the prefix up to
+A single `POST /orders/delete` by a manager therefore leaves three lines (`token
+allow`, `policy allow`, `credential allow`), and a refusal leaves the prefix up to
 whichever gate closed. `subject` is the token's `preferred_username`, and `roles`
 carries `realm_access.roles`, which is the claim the policy actually turns on, so a
 deny is explicable from the log alone.
@@ -462,7 +462,7 @@ deny is explicable from the log alone.
 credential was issued and its TTL, not its value.
 
 OPA logs the other half. `--set=decision_logs.console=true` (section 4) makes it
-emit the decision itself — the full input it was given and the result it returned —
+emit the decision itself, the full input it was given and the result it returned,
 rather than only the fact that `/v1/data/authz/allow` was served:
 
 ```bash
@@ -516,12 +516,12 @@ Keycloak session.
 Step 4 is the whole point: the browser still bounces through Keycloak (watch the
 address bar flick through `localhost:8080`), but because the realm session cookie
 from step 1 is still valid, Keycloak issues a new assertion immediately instead of
-asking for credentials. It works in either order — start on 9002 and 9001 becomes
+asking for credentials. It works in either order: start on 9002 and 9001 becomes
 the silent one.
 
 To repeat the demo, clear cookies for `localhost` or open a new private window.
 Each app's `/logout` only drops its *own* session, deliberately leaving the
-Keycloak realm session intact — so after a local logout you will still be signed
+Keycloak realm session intact, so after a local logout you will still be signed
 back in silently.
 
 ### Why the apps have different session cookie names
@@ -530,15 +530,60 @@ Browser cookies are scoped to a host, not a port, so `localhost:9001` and
 `localhost:9002` share one cookie jar. The apps therefore use distinct cookie
 names (`mock_docs_session`, `mock_dashboard_session`) and distinct secret keys.
 Without that, the second app would simply read the first app's session cookie and
-look logged in without ever contacting Keycloak — which would make the SSO demo
+look logged in without ever contacting Keycloak, which would make the SSO demo
 prove nothing.
 
 ### The single `Role` attribute
 
 Out of the box Keycloak's `role_list` mapper emits one `<Attribute Name="Role">`
-element per role. Strict SAML SPs — `python3-saml` included — reject an assertion
+element per role. Strict SAML SPs, `python3-saml` included, reject an assertion
 containing duplicated attribute names, and login fails with *"Found an Attribute
 element with duplicated Name"*. `keycloak-setup.py` sets that mapper's **Single
 Role Attribute** option so all roles arrive in one multi-valued attribute. The
 realm has no other SAML clients, so the change is safe realm-wide.
 
+
+## 8. Verifying everything at once
+
+`./verify.sh` re-runs the core checks from the sections above in a single pass,
+printing one `PASS` or `FAIL` line per check:
+
+```bash
+./verify.sh
+```
+
+It confirms that every service is up, that the plaintext baseline is refused at
+the gateway, that Keycloak issues a token and the gateway answers 401 without one
+and 200 with one, that mutual TLS verifies between `gateway` and `orders` and
+that a caller presenting no client certificate is refused, that
+`opa test policies/ -v` passes, that OPA allows a manager and denies a
+non-manager on the identical endpoint, and that a freshly minted Vault credential
+is accepted inside its TTL.
+
+```
+5. OPA policy unit tests
+  PASS  opa test policies/ -v reported PASS: 7/7
+
+6. Live OPA decision, same endpoint, different roles
+  PASS  testuser (no manager role) denied -> 403 forbidden
+  PASS  manageruser allowed on the identical request -> 200
+  PASS  testuser denied on POST /orders/delete -> 403 forbidden
+
+Summary
+  22 passed, 0 failed
+```
+
+The script exits `0` when every check passes and `1` if any of them fails, so it
+works as a pre-commit or CI gate. Its prerequisites are the same as the rest of
+this file: `./certs/generate.sh` has been run, the stack is up, and `.env` holds
+a current `KEYCLOAK_CLIENT_SECRET`. A missing prerequisite is reported as a setup
+error with exit code `2`, which is deliberately distinct from a failed check.
+
+Note that the Vault check really does delete an order. `ORDERS` in
+`orders/app.py` is an in-memory list, so once the three seeded orders have been
+spent the script restarts the `orders` service to reseed them, which keeps
+repeated runs working.
+
+Two things it does not cover, because neither is scriptable without a browser or
+a packet capture: the SAML single sign-on walkthrough in section 7, and the
+`tcpdump` evidence shown in `README.md`.
