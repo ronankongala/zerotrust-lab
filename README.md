@@ -3,7 +3,7 @@
 A local zero trust test bed. Three microservices (`gateway`, `orders`, `inventory`)
 run behind an enforcing gateway that has to satisfy four independent layers before
 a request reaches an upstream service: mutual TLS, an OIDC token from Keycloak, an
-Open Policy Agent decision, and — for privileged actions — a short-lived HashiCorp
+Open Policy Agent decision, and, for privileged actions, a short-lived HashiCorp
 Vault credential. Two mock SAML service providers sit alongside it to demonstrate
 federated single sign-on against the same realm.
 
@@ -53,7 +53,7 @@ users view confirms the test accounts the later steps authenticate as.
 ### 3. OIDC token request and authenticated call
 
 With the realm provisioned, a token is requested straight from Keycloak's token
-endpoint using the resource owner password grant — a `POST` to
+endpoint using the resource owner password grant: a `POST` to
 `/realms/zerotrust-lab/protocol/openid-connect/token` with `grant_type=password`,
 the `gateway-client` credentials, and the test user's password. The returned access
 token is then presented to the gateway's `/route-test` endpoint as a bearer token.
@@ -72,7 +72,7 @@ redirects to Keycloak and prompts for credentials; visiting `mock-dashboard`
 afterwards in the same browser renders immediately as signed in. No second login
 prompt appears, because the browser still round-trips through Keycloak but the realm
 session cookie from the first login is still valid, so Keycloak issues a fresh
-assertion instead of asking for credentials. The distinct cookie names matter — with
+assertion instead of asking for credentials. The distinct cookie names matter: with
 a shared one the second app could read the first app's session and the demo would
 prove nothing.
 
@@ -84,7 +84,7 @@ Service-to-service traffic is mutually authenticated: `gateway`, `orders` and
 `inventory` each present a certificate signed by the lab CA in `certs/ca.crt` and
 each require one from the caller. The handshake is inspected directly with
 `openssl s_client`, which shows the peer certificate chain, the acceptable client CA
-the server advertises, and the verification result. Both directions validate — the
+the server advertises, and the verification result. Both directions validate: the
 client checks the server's chain to the CA, and the server rejects any caller that
 cannot present a certificate the same CA signed. Identity here is the certificate,
 not the source address.
@@ -95,7 +95,7 @@ not the source address.
 
 To confirm the handshake above is not just configuration, traffic on the bridge
 network is captured with `tcpdump` while a request flows between services. The
-capture shows the TLS records — handshake, then application data — with no readable
+capture shows the TLS records, handshake then application data, with no readable
 HTTP method, path, header or body anywhere in the payload. Contrasted with the
 plaintext baseline taken before mTLS was introduced, where the same request was
 fully legible in the capture, this is the difference between traffic that is
@@ -121,7 +121,7 @@ The same rules are then exercised against the running gateway, which calls OPA a
 its decision point on every request. Two users hit the identical protected endpoint
 with identical requests, differing only in the roles carried by their token:
 `testuser` is denied with a 403, and `manageruser` is allowed through. Nothing about
-the request path or the network changed between the two calls — the decision is made
+the request path or the network changed between the two calls: the decision is made
 per request from the token's claims, which is what makes the policy dynamic rather
 than a static access list.
 

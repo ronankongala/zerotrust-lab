@@ -6,7 +6,7 @@ mechanism that implements it in this repo, with the file and line that carries i
 **How the evidence was produced.** Responses quoted below were captured on
 2026-09-12 against the running stack (`docker compose ps`: gateway, orders,
 inventory, opa, vault, keycloak, mock-docs, mock-dashboard all up), using the
-smoke-test invocation from `SETUP.md` §3 — a CA-signed client cert plus
+smoke-test invocation from `SETUP.md` §3: a CA-signed client cert plus
 `--resolve gateway:8000:127.0.0.1`. Tokens were obtained by direct grant for
 `testuser` and `manageruser`. Anything not verified that way is marked as such.
 
@@ -16,7 +16,7 @@ above and has since been executed against a rebuilt gateway:
 
 - `opa test policies/ -v` reported `PASS: 7/7`.
 - One allowed `GET /route-test` and one denied `POST /orders/delete` were driven through
-  the rebuilt gateway. The gateway's log carried the expected JSON lines —
+  the rebuilt gateway. The gateway's log carried the expected JSON lines:
   `{"decision":"allow","event":"token",...}` then `{"decision":"allow","event":"policy",...}`
   for the GET, and `{"decision":"allow","event":"token",...}` then
   `{"decision":"deny","event":"policy","reason":"OPA returned allow=false",...}` for the POST.
@@ -26,8 +26,13 @@ above and has since been executed against a rebuilt gateway:
 That confirms the two emitters produce the records described below, and that the PDP's
 answer is auditable independently of the PEP that asked. It confirms nothing further:
 this is still `print()` to stdout with no aggregation, retention or alerting, as tenet 7
-states. The `credential` events were not exercised — the denied `POST` closed at the
-policy gate, before the Vault check.
+states.
+
+A later full re-run on the same date exercised the remaining paths, including the
+`credential` events the earlier run never reached: `docker compose logs gateway`
+recorded `credential`/`issue` on a mint, `credential`/`allow` on a delete inside the
+TTL, and `credential`/`deny` both for a missing `X-Vault-Credential` header and for a
+credential replayed after it expired.
 
 Each tenet also records what is **not** implemented. Several tenets are only
 partially met; tenets 5 and 7 are substantially unmet, and saying otherwise would
@@ -35,11 +40,11 @@ misrepresent the lab.
 
 ---
 
-## Tenet 1 — All data sources and computing services are considered resources
+## Tenet 1: All data sources and computing services are considered resources
 
 **Mechanism: per-service X.509 identity + no direct network reachability.**
 
-`orders` and `inventory` publish no host ports at all — `docker-compose.yml:112-126`
+`orders` and `inventory` publish no host ports at all. `docker-compose.yml:112-126`
 declares them with only a `./certs:/certs:ro` mount and the `ztlab-net` bridge, and
 `docker compose ps` reports them as `5000/tcp` (container-internal) while every other
 service shows a `0.0.0.0:...->` mapping. They are reachable only as resources behind
@@ -53,7 +58,7 @@ Each service carries its own identity rather than inheriting the network's:
 | `certs/orders.crt` | `CN=orders` | `DNS:orders` | `CN=ZeroTrustLab-CA` |
 | `certs/inventory.crt` | `CN=inventory` | `DNS:inventory` | `CN=ZeroTrustLab-CA` |
 
-Resources are named individually in policy by method+path, not by host or subnet —
+Resources are named individually in policy by method+path, not by host or subnet.
 `policies/authz.rego` has separate rules for `/route-test` (line 24), `/orders/delete`
 (line 33) and `/admin/mint-delete-credential` (line 43).
 
@@ -68,7 +73,7 @@ those two resources are identified but not cryptographically protected in transi
 
 ---
 
-## Tenet 2 — All communication is secured regardless of network location
+## Tenet 2: All communication is secured regardless of network location
 
 **Mechanism: mutual TLS with `ssl.CERT_REQUIRED` on every application listener,
 including the ones that only ever hear from a peer on the same private bridge.**
@@ -87,7 +92,7 @@ That is the "regardless of network location" part: `orders` sits on a private Do
 network with no published port and still refuses a handshake from a client the lab CA
 did not sign.
 
-Outbound calls are the other half — `gateway/app.py:76-78` pins a client cert and CA
+Outbound calls are the other half: `gateway/app.py:76-78` pins a client cert and CA
 bundle on the upstream session:
 
 ```python
@@ -96,7 +101,7 @@ upstream.verify = TLS_CA
 ```
 
 Hostname verification is left on, which is why `docker-compose.yml:9-10` sets
-`ORDERS_URL: https://orders:5000` — the name has to match `DNS:orders` in the SAN.
+`ORDERS_URL: https://orders:5000`, because the name has to match `DNS:orders` in the SAN.
 The CA bundle is mounted read-only at `docker-compose.yml:22`, `116` and `124`, with
 the reasoning stated in the file: a container that can rewrite the bundle it validates
 against can trust anything it likes.
@@ -105,13 +110,13 @@ against can trust anything it likes.
 
 ```
 $ curl -s http://localhost:8000/route-test
-curl exit 52 (empty reply) — no plaintext listener exists
+curl exit 52 (empty reply), no plaintext listener exists
 
 $ curl -sS --cacert certs/ca.crt --resolve gateway:8000:127.0.0.1 https://gateway:8000/route-test
 curl: (56) OpenSSL SSL_read: error:0A00045C:SSL routines::tlsv13 alert certificate required
 ```
 
-The second refusal happens in the TLS handshake — no Flask route runs, so there is no
+The second refusal happens in the TLS handshake, so no Flask route runs and there is no
 401 to report. That is the distinction the tenet is after.
 
 **Not implemented.** Gateway↔OPA and gateway↔Vault are plain HTTP. Keycloak runs
@@ -120,16 +125,16 @@ The second refusal happens in the TLS handshake — no Flask route runs, so ther
 
 ---
 
-## Tenet 3 — Access to individual enterprise resources is granted on a per-session basis
+## Tenet 3: Access to individual enterprise resources is granted on a per-session basis
 
-**Mechanism: a stateless gateway plus two independent expiry clocks — a 300-second
+**Mechanism: a stateless gateway plus two independent expiry clocks: a 300-second
 OIDC access token and a 20-second Vault credential.**
 
 *Token clock.* `zerotrust-lab-realm-export.json` sets `"accessTokenLifespan":300`.
 Confirmed on a live token issued this session: `exp - iat = 300`. The gateway refuses
-to accept a token that does not carry an expiry at all —
+to accept a token that does not carry an expiry at all:
 `gateway/app.py:156` passes `options={"verify_aud": False, "require": ["exp", "iss"]}`
-to `jwt.decode` — and maps a lapsed one to a 401 at `gateway/app.py:158-160`.
+to `jwt.decode`, and maps a lapsed one to a 401 at `gateway/app.py:158-160`.
 
 *No session state.* `require_token_and_policy` (`gateway/app.py:141-199`) re-runs
 signature verification and the policy call on every request. The gateway holds no
@@ -140,8 +145,10 @@ material, not an access decision.
 *Credential clock.* The destructive path narrows the session much further.
 `vault/setup.sh:40-47` creates the AppRole with `token_ttl` and `token_max_ttl` both
 set from `DELETE_CREDENTIAL_TTL` (`20s`, `docker-compose.yml:72`), plus
-`token_no_default_policy=true`. Equal ttl and max_ttl is what makes it non-renewable —
-there is no way to hold one open.
+`token_no_default_policy=true`. Equal ttl and max_ttl is what caps the credential's
+life: Vault still reports it as `renewable` and will accept a renew call, but the
+renewal cannot push the expiry past the 20 second maximum, so there is no way to hold
+one open.
 
 **Verified this session:**
 
@@ -160,22 +167,34 @@ $ POST /orders/delete  (same manager token + that credential)
 credential was spent (`gateway/app.py:446`), read from the lookup response rather than
 computed locally.
 
+The expiry demo from `SETUP.md:339-348` was subsequently run end to end. A credential
+was minted, left untouched for 25 seconds, then replayed against the same endpoint:
+
+```
+$ vault token lookup <credential>        (immediately after minting)
+ttl: 18   policies: ["delete-order"]   num_uses: 0
+
+$ POST /orders/delete   (manager token + a credential minted 25s earlier)
+{"error":"vault_credential_invalid","detail":"vault rejected the credential in
+ X-Vault-Credential (expired, revoked, malformed, or never issued): 2 errors
+ occurred: * permission denied * invalid token"}
+```
+
+Renewal buys no extra time: `vault token renew -increment=1h` against a fresh
+credential returned `token_duration 19s`, capped by `token_max_ttl`.
+
 *Browser sessions.* On the SAML side each SP keeps a session of its own:
 `mock-docs/app.py:43` sets a per-app `SESSION_COOKIE_NAME`, and
 `docker-compose.yml:141` / `160` give the two apps different `FLASK_SECRET_KEY`s,
 because `localhost:9001` and `localhost:9002` share one cookie jar and a shared key
 would let either app read the other's session.
 
-**Not implemented.** The 20-second expiry demo in `SETUP.md:339-348` (mint, wait 25s,
-replay the same credential, receive `vault_credential_invalid`) was **not** re-run in
-this session — the run was cut short by a tooling block. The 20s TTL itself is
-verified above from `ttl_seconds` and the falling `credential_ttl_remaining`.
-Separately, `token_num_uses=0` (`vault/setup.sh:46`) leaves a credential replayable
-*within* its window — the control is time-bounded, not single-use.
+**Not implemented.** `token_num_uses=0` (`vault/setup.sh:46`) leaves a credential
+replayable *within* its window, so the control is time-bounded, not single-use.
 
 ---
 
-## Tenet 4 — Access is determined by dynamic policy
+## Tenet 4: Access is determined by dynamic policy
 
 **Mechanism: the decision is made outside the gateway, by OPA, against live token
 claims, under a deny-by-default rule set that reloads without a restart.**
@@ -188,7 +207,7 @@ payload = {"input": {"authenticated": True, "method": request.method,
 response = opa.post(OPA_URL, json=payload, timeout=TIMEOUT)   # /v1/data/authz/allow
 ```
 
-There is no role comparison anywhere in `gateway/app.py` — the gateway is a PEP that
+There is no role comparison anywhere in `gateway/app.py`: the gateway is a PEP that
 asks, and `policies/authz.rego` is the PDP that answers.
 
 The policy is deny-by-default at `policies/authz.rego:20`:
@@ -200,7 +219,7 @@ default allow := false
 Three rules grant anything, and each names an explicit method and path:
 `GET /route-test` for any authenticated user (line 24), `POST /orders/delete` (line 33)
 and `GET /admin/mint-delete-credential` (line 43) for holders of the `manager` realm
-role. The role test at lines 52-55 reads `input.claims.realm_access.roles` — the live
+role. The role test at lines 52-55 reads `input.claims.realm_access.roles`, the live
 claim, not a copy in config:
 
 ```rego
@@ -212,7 +231,7 @@ has_realm_role(role) if {
 
 The attribute it reads is provisioned in `keycloak-setup.py` (`MANAGER_ROLE = "manager"`,
 line 27; the two-user fixture at line 40, one with the role and one without) and
-appears in a real token — confirmed this session on a `manageruser` access token:
+appears in a real token, confirmed this session on a `manageruser` access token:
 `realm_access.roles = ['manager','offline_access','uma_authorization','default-roles-zerotrust-lab']`.
 
 *Dynamic in the operational sense too.* `docker-compose.yml:99` passes `--watch` to
@@ -225,21 +244,21 @@ sent byte-identical requests to `POST /orders/delete` and got 403 and "policy al
 respectively, with the only difference being one claim in the token.
 
 **Not implemented.** The policy's input carries only `authenticated`, `method`, `path`
-and `claims` — no time of day, no source address, no device signal, no request history.
+and `claims`: no time of day, no source address, no device signal, no request history.
 "Dynamic" here means *evaluated per request against live claims*, not *risk-adaptive*.
 
 **Test coverage.** `policies/authz_test.rego` contains 7 `test_` rules (lines 20, 29,
-38, 47, 56, 68, 78) — both sides of each of the three allow rules, plus a deny-by-default
+38, 47, 56, 68, 78), covering both sides of each of the three allow rules, plus a deny-by-default
 case for an unnamed path. `SETUP.md` §4 previously described five and printed
 `PASS: 5/5`, predating the two mint-endpoint tests; it now says seven. The suite was
-executed — `opa test policies/ -v` reported `PASS: 7/7` (see the verification note at the
+executed: `opa test policies/ -v` reported `PASS: 7/7` (see the verification note at the
 top of this file), matching the seven rule declarations in the file.
 
 ---
 
-## Tenet 5 — The enterprise monitors and measures the integrity and security posture of all assets
+## Tenet 5: The enterprise monitors and measures the integrity and security posture of all assets
 
-**Partially met.** Asset *posture* — device health, patch level, attestation — is still
+**Partially met.** Asset *posture*, meaning device health, patch level and attestation, is still
 never measured, and nothing in this repo could measure it. What is built is narrower
 but real: credential and identity state is re-checked against the authoritative source
 on every use rather than cached, and every such check now leaves a record.
@@ -271,10 +290,10 @@ What is actually built:
 - **Dependency state gates startup.** `docker-compose.yml:32-35` blocks the gateway on
   `vault-init: condition: service_completed_successfully`, so it cannot come up in a
   state where the AppRole it depends on does not exist.
-- **Identity is verified cryptographically per connection** — `CERT_REQUIRED` against
+- **Identity is verified cryptographically per connection**, via `CERT_REQUIRED` against
   `certs/ca.crt` (tenet 2), which is a check on *who* an asset is, not on its health.
 
-Not implemented — no part of the following exists in the repo:
+Not implemented. No part of the following exists in the repo:
 
 - No device or host posture signal of any kind: no agent, no attestation, no OS/patch
   state, and nothing in the OPA input that could carry one.
@@ -284,7 +303,7 @@ Not implemented — no part of the following exists in the repo:
   `Sep 12 2026 → Sep 12 2027` with private keys sitting in `certs/`.
 - **The gateway never inspects the client certificate it accepted.** `getpeercert`
   appears nowhere in the repo, so the mTLS peer's identity never reaches the policy
-  input — the cert is a gate, not an observed attribute.
+  input, so the cert is a gate, not an observed attribute.
 - `/health` endpoints exist (`gateway/app.py:371-373`, `orders/app.py:33-35`,
   `inventory/app.py:33-35`) but nothing polls them: `docker-compose.yml` contains no
   `healthcheck:` block, and every `depends_on` except `vault-init` uses
@@ -295,7 +314,7 @@ Not implemented — no part of the following exists in the repo:
 
 ---
 
-## Tenet 6 — All resource authentication and authorization are dynamic and strictly enforced before access is allowed
+## Tenet 6: All resource authentication and authorization are dynamic and strictly enforced before access is allowed
 
 **Mechanism: three gates, stacked as decorators, all of which run before the view body
 executes; every failure mode is fail-closed.**
@@ -324,7 +343,7 @@ caller without the `manager` role never learns that a Vault gate exists.
 
 | Site | Behaviour |
 | --- | --- |
-| `gateway/app.py:130` | `body.get("result") is True` — an undefined OPA result is a deny, not an allow |
+| `gateway/app.py:130` | `body.get("result") is True`, so an undefined OPA result is a deny, not an allow |
 | `gateway/app.py:192-195` | OPA unreachable → 503 `policy_unavailable` ("no decision is not the same as an allow") |
 | `gateway/app.py:355-357` | Vault unreachable → 503 `vault_unavailable` |
 | `gateway/app.py:302-307` | live-but-wrong-scope credential → 403 |
@@ -348,7 +367,7 @@ and a Vault credential minted seconds earlier and scoped to `delete-order`. Remo
 any one produced a distinct, non-overlapping refusal above.
 
 The mint endpoint is itself behind the policy (`gateway/app.py:394-395`), so the
-authorization to obtain the second factor is enforced by the same PDP as the action —
+authorization to obtain the second factor is enforced by the same PDP as the action;
 row 4 above is that check failing for a non-manager.
 
 **Not implemented.** The two authentication layers are not bound to each other: the
@@ -362,9 +381,9 @@ except through the PEP.
 
 ---
 
-## Tenet 7 — The enterprise collects as much information as possible on the current state of assets and uses it to improve its security posture
+## Tenet 7: The enterprise collects as much information as possible on the current state of assets and uses it to improve its security posture
 
-**Partially met — collection yes, "uses it to improve posture" still manual.** Every
+**Partially met: collection yes, "uses it to improve posture" still manual.** Every
 authentication, authorization and credential decision is now recorded. Nothing
 aggregates, retains, correlates or acts on those records; a human reading
 `docker compose logs` is the entire analysis tier. Calling this a SIEM would be false.
@@ -372,7 +391,7 @@ aggregates, retains, correlates or acts on those records; a human reading
 What is actually built:
 
 - **The gateway logs every decision point, one JSON object per line to stdout.**
-  `audit()` at `gateway/app.py:33-53` is the whole emitter — `print(json.dumps(record,
+  `audit()` at `gateway/app.py:33-53` is the whole emitter, a single `print(json.dumps(record,
   sort_keys=True), flush=True)`, no logging framework, no handler configuration. The
   record it builds has this shape. A captured deny line from the verification run at the
   top of this file matched it on `decision`, `event` and `reason`; the remaining fields
@@ -422,14 +441,14 @@ What is actually built:
   adds `--set=decision_logs.console=true`. Without it `--log-level=info` records only
   that `/v1/data/authz/allow` was served; with it OPA emits the full input it was given
   and the result it returned, so the PDP's answer is auditable independently of the PEP
-  that asked. Console sink only — no bundle service, no remote decision-log endpoint.
+  that asked. Console sink only, with no bundle service and no remote decision-log endpoint.
 
 - **Every refusal is attributable to a specific layer.** The seven error codes tabled
   at `SETUP.md:363-371` each originate at one site: `unauthorized`
   (`gateway/app.py:147`, `160`, `163`), `forbidden` (`184-191`),
   `vault_credential_required` (`331-341`), `vault_credential_invalid` (`292-296`),
   `vault_credential_out_of_scope` (`302-307`), `policy_unavailable` (`195`),
-  `vault_unavailable` (`357`, `408`). A 403 never leaves you guessing which gate closed —
+  `vault_unavailable` (`357`, `408`). A 403 never leaves you guessing which gate closed, as
   verified in the tenet 6 table, where three different 403s came back from three
   different causes.
 - **Responses carry subject and credential state too**, not just the log: denials name
@@ -437,7 +456,7 @@ What is actually built:
   actor and the seconds left on the spent credential (`gateway/app.py:443-446`).
 - **Live credential state is inspectable.** `vault token lookup "$CRED"` against the
   fixed root token shows a TTL counting down (`SETUP.md:403-407`).
-- **Policy behaviour is testable offline** against recorded token shapes —
+- **Policy behaviour is testable offline** against recorded token shapes:
   `policies/authz_test.rego` covers both sides of every rule plus a deny-by-default
   case for an unnamed path (line 78).
 - **Feedback loop, manual.** `--watch` on the mounted policy dir
@@ -450,7 +469,7 @@ Not implemented:
 
 - **This is `print()` to stdout, not a logging subsystem.** No `logging` module, so no
   levels, no handlers, no rotation, no way to turn it down in production. `orders`,
-  `inventory` and the two mock SPs still log nothing of their own — only the gateway
+  `inventory` and the two mock SPs still log nothing of their own; only the gateway
   and OPA emit records.
 - **No correlation.** A gateway line and the OPA decision line it caused share no
   request ID, so pairing them means matching on timestamp, subject and path by eye.
@@ -458,12 +477,12 @@ Not implemented:
 - **No aggregation, retention or alerting.** No SIEM, no log driver configuration, no
   metrics endpoint (OPA's `/metrics` is still not enabled), and nothing that consumes
   any of this automatically. `docker compose logs` is the whole collection tier,
-  bounded by container lifetime — restart a container and its history is gone.
-- **Nothing acts on the data.** The tenet's second half — *uses it to improve its
-  security posture* — has no automated component here at all. The loop is a human
+  bounded by container lifetime: restart a container and its history is gone.
+- **Nothing acts on the data.** The tenet's second half, *uses it to improve its
+  security posture*, has no automated component here at all. The loop is a human
   reading a deny, editing `authz.rego`, and letting `--watch` reload it.
 - Vault runs in dev mode with in-memory storage (`docker-compose.yml:42-47`), so its
-  audit-relevant state does not survive a restart — and no audit device is enabled.
+  audit-relevant state does not survive a restart, and no audit device is enabled.
 
 ---
 
