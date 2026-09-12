@@ -1,0 +1,27 @@
+# Secrets — the gateway client secret is printed by keycloak-setup.py and is
+# specific to each fresh realm provision, so it belongs in a local .env only.
+.env
+.env.*
+!.env.example
+
+# TLS material for the lab CA and the three services. Both the private keys and
+# the certificates they sign are generated locally; nothing here is meant to
+# leave the machine that made it. Note this excludes the directory's *contents*
+# rather than the directory itself -- git cannot re-include a file whose parent
+# directory is excluded, and the script that regenerates all of it lives here.
+certs/*
+!certs/generate.sh
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

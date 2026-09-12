@@ -1,0 +1,186 @@
+services:
+  gateway:
+    build: ./gateway
+    container_name: ztlab-gateway
+    ports:
+      # https now: the gateway terminates TLS itself, there is no proxy in front.
+      - "8000:5000"
+    environment:
+      ORDERS_URL: https://orders:5000
+      INVENTORY_URL: https://inventory:5000
+      KEYCLOAK_JWKS_URL: http://keycloak:8080/realms/zerotrust-lab/protocol/openid-connect/certs
+      KEYCLOAK_ISSUER: http://localhost:8080/realms/zerotrust-lab
+      OPA_URL: http://opa:8181/v1/data/authz/allow
+      VAULT_ADDR: http://vault:8200
+      # The gateway's own AppRole identity, used only to mint delete credentials.
+      # Not a Vault token: it buys a 20-second one, per request, on demand.
+      VAULT_ROLE_ID: ztlab-gateway-delete-role
+      VAULT_SECRET_ID: ztlab-gateway-delete-secret
+    volumes:
+      # Read-only: a container that can rewrite the CA bundle it validates
+      # against can trust anything it likes.
+      - ./certs:/certs:ro
+    depends_on:
+      orders:
+        condition: service_started
+      inventory:
+        condition: service_started
+      keycloak:
+        condition: service_started
+      opa:
+        condition: service_started
+      # Not just "vault is up": the AppRole the gateway authenticates with does
+      # not exist until vault-init has finished writing it.
+      vault-init:
+        condition: service_completed_successfully
+    networks:
+      - ztlab-net
+
+  vault:
+    image: hashicorp/vault:latest
+    container_name: ztlab-vault
+    # Dev mode: in-memory storage, auto-unsealed, root token fixed to the value
+    # below. Fine for a lab and disqualifying for anything else -- every secret
+    # is gone on restart and the root token is in version control.
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ztlab-root-token
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    ports:
+      - "8200:8200"
+    cap_add:
+      # Lets Vault mlock its memory so secrets are never paged to disk. Dev mode
+      # disables mlock anyway; kept so the service looks like a real one.
+      - IPC_LOCK
+    networks:
+      - ztlab-net
+
+  # One-shot: configures the approle auth method, then exits. Dev-mode Vault
+  # keeps nothing across restarts, so this has to run on every `up` -- which is
+  # why it is a compose service and not a script you run by hand.
+  vault-init:
+    image: hashicorp/vault:latest
+    container_name: ztlab-vault-init
+    restart: "no"
+    entrypoint: ["sh", "/vault-setup.sh"]
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ztlab-root-token
+      # Must match the gateway's VAULT_ROLE_ID / VAULT_SECRET_ID above.
+      DELETE_ROLE_ID: ztlab-gateway-delete-role
+      DELETE_SECRET_ID: ztlab-gateway-delete-secret
+      # Short enough that you can watch a credential die between two curls.
+      DELETE_CREDENTIAL_TTL: 20s
+    volumes:
+      - ./vault/setup.sh:/vault-setup.sh:ro
+    depends_on:
+      - vault
+    networks:
+      - ztlab-net
+
+  opa:
+    image: openpolicyagent/opa:latest
+    container_name: ztlab-opa
+    # "run --server" with a directory loads every .rego under it and serves the
+    # decisions at /v1/data/<package path>. Published so you can query the same
+    # policy by hand from the host while debugging a 403.
+    command:
+      - "run"
+      - "--server"
+      - "--addr=0.0.0.0:8181"
+      - "--log-level=info"
+      # --log-level alone only records *that* /v1/data/authz/allow was served.
+      # This makes OPA emit the decision itself -- the full input it was given
+      # and the result it returned -- so an allow or a deny can be audited at
+      # the PDP and not just at the gateway that asked. Console only: no bundle
+      # service, no remote sink, it lands in `docker compose logs opa`.
+      - "--set=decision_logs.console=true"
+      # Without this OPA reads /policies once at startup and never again, so an
+      # edit to authz.rego would silently keep serving the old decision.
+      - "--watch"
+      # The unit tests live next to the policy; the server has no use for them.
+      - "--ignore=*_test.rego"
+      - "/policies"
+    ports:
+      - "8181:8181"
+    volumes:
+      # Read-only: a container that can rewrite its own policy can authorize
+      # whatever it likes.
+      - ./policies:/policies:ro
+    networks:
+      - ztlab-net
+
+  orders:
+    build: ./orders
+    container_name: ztlab-orders
+    volumes:
+      - ./certs:/certs:ro
+    networks:
+      - ztlab-net
+
+  inventory:
+    build: ./inventory
+    container_name: ztlab-inventory
+    volumes:
+      - ./certs:/certs:ro
+    networks:
+      - ztlab-net
+
+  mock-docs:
+    build: ./mock-docs
+    container_name: ztlab-mock-docs
+    ports:
+      - "9001:5000"
+    environment:
+      # The address the browser uses; every URL handed to Keycloak is built from it.
+      SP_BASE_URL: http://localhost:9001
+      SP_ENTITY_ID: mock-docs-saml
+      # Browser-facing Keycloak (redirects) vs in-network Keycloak (metadata fetch).
+      IDP_PUBLIC_URL: http://localhost:8080
+      IDP_INTERNAL_URL: http://keycloak:8080
+      KEYCLOAK_REALM: zerotrust-lab
+      FLASK_SECRET_KEY: mock-docs-dev-secret
+    depends_on:
+      - keycloak
+    networks:
+      - ztlab-net
+
+  mock-dashboard:
+    build: ./mock-dashboard
+    container_name: ztlab-mock-dashboard
+    ports:
+      - "9002:5000"
+    environment:
+      SP_BASE_URL: http://localhost:9002
+      SP_ENTITY_ID: mock-dashboard-saml
+      IDP_PUBLIC_URL: http://localhost:8080
+      IDP_INTERNAL_URL: http://keycloak:8080
+      KEYCLOAK_REALM: zerotrust-lab
+      # Deliberately different from mock-docs: a shared key plus a shared
+      # "localhost" cookie jar would let one app read the other's session.
+      FLASK_SECRET_KEY: mock-dashboard-dev-secret
+    depends_on:
+      - keycloak
+    networks:
+      - ztlab-net
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    container_name: keycloak
+    command: ["start-dev"]
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    ports:
+      - "8080:8080"
+    volumes:
+      - keycloak-data:/opt/keycloak/data
+    networks:
+      - ztlab-net
+
+volumes:
+  keycloak-data:
+
+networks:
+  ztlab-net:
+    name: ztlab-net
+    driver: bridge
