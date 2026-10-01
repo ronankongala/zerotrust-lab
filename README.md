@@ -34,10 +34,9 @@ transport security and time-bound privilege on top.
 The test bed is defined entirely in `docker-compose.yml` and started with
 `docker compose up --build`. The gateway is the only service published to the host,
 on port 8000 (mapped to its internal 5000); `orders` and `inventory` are attached to
-the `ztlab-net` bridge network with no port mapping at all, so there is no path to
-them from the host. This is the network precondition the rest of the lab depends on:
-every request to an upstream service has to pass through the gateway, because there
-is nowhere else to send it.
+the `ztlab-net` bridge network with no port mapping, so there is no path to them
+from the host. Every request to an upstream service has to pass through the gateway,
+because there is nowhere else to send it.
 
 ![Docker Compose bringing up the gateway, orders, inventory and supporting services](screenshots/docker_compose_up.png)
 
@@ -61,10 +60,8 @@ With the realm provisioned, a token is requested straight from Keycloak's token
 endpoint using the resource owner password grant: a `POST` to
 `/realms/zerotrust-lab/protocol/openid-connect/token` with `grant_type=password`,
 the `gateway-client` credentials, and the test user's password. The returned access
-token is then presented to the gateway's `/route-test` endpoint as a bearer token.
-The same endpoint returns 401 without a token, so the 200 here is the token doing
-the work: authentication is enforced at the gateway rather than assumed from network
-position.
+token is then presented to the gateway's `/route-test` endpoint as a bearer token
+and gets a 200. Without a token, the same endpoint returns 401.
 
 ![OIDC token requested from Keycloak and used to authenticate against the gateway](screenshots/oidc_token_request.png)
 
@@ -91,20 +88,17 @@ each require one from the caller. The handshake is inspected directly with
 `openssl s_client`, which shows the peer certificate chain, the acceptable client CA
 the server advertises, and the verification result. Both directions validate: the
 client checks the server's chain to the CA, and the server rejects any caller that
-cannot present a certificate the same CA signed. Identity here is the certificate,
-not the source address.
+cannot present a certificate the same CA signed.
 
 ![openssl s_client output verifying the mutual TLS handshake between services](screenshots/mtls_handshake_verified.png)
 
 ### 6. Encrypted traffic on the wire
 
-To confirm the handshake above is not just configuration, traffic on the bridge
-network is captured with `tcpdump` while a request flows between services. The
-capture shows the TLS records, handshake then application data, with no readable
-HTTP method, path, header or body anywhere in the payload. Contrasted with the
-plaintext baseline taken before mTLS was introduced, where the same request was
-fully legible in the capture, this is the difference between traffic that is
-protected on an untrusted network and traffic that merely sits on a private one.
+Traffic on the bridge network is captured with `tcpdump` while a request flows
+between services. The capture shows the TLS records, handshake then application
+data, with no readable HTTP method, path, header or body anywhere in the payload.
+In the plaintext baseline taken before mTLS was introduced, the same request was
+fully legible.
 
 ![tcpdump capture showing encrypted service-to-service traffic](screenshots/tcpdump_encrypted_traffic.png)
 
@@ -125,10 +119,8 @@ re-verified without rebuilding or restarting the service.
 The same rules are then exercised against the running gateway, which calls OPA as
 its decision point on every request. Two users hit the identical protected endpoint
 with identical requests, differing only in the roles carried by their token:
-`testuser` is denied with a 403, and `manageruser` is allowed through. Nothing about
-the request path or the network changed between the two calls: the decision is made
-per request from the token's claims, which is what makes the policy dynamic rather
-than a static access list.
+`testuser` is denied with a 403, and `manageruser` is allowed through. The decision
+is made per request from the token's claims.
 
 ![OPA denying a non-manager and allowing a manager on the same endpoint](screenshots/opa_policy_decision.png)
 

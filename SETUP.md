@@ -2,9 +2,9 @@
 
 ## 1. Start the stack
 
-The services authenticate each other with mutual TLS, and `certs/` is **not in the
-repository**, because the private keys are deliberately gitignored, so a fresh clone has
-none of that material and the stack cannot come up without it. Generate it first:
+The services authenticate each other with mutual TLS. `certs/` is **not in the
+repository** because the private keys are deliberately gitignored, so a fresh clone
+has no certificates and the stack cannot come up until you generate them:
 
 ```bash
 ./certs/generate.sh
@@ -72,7 +72,7 @@ the state.
 
 A partial export from the Keycloak admin console masks client secrets as
 `**********`, and importing that verbatim would set the literal string as the
-secret. The script detects a masked secret and generates a real one, then prints
+secret. The script detects a masked secret, has Keycloak generate a new one, and prints
 it. **The secret therefore changes on the first provision of a fresh realm**, so
 copy the printed value into `.env` rather than relying on an older one:
 
@@ -160,7 +160,7 @@ claims plus the requested method and path to
                       "realm_access": {"roles": ["manager"]}}}}
 ```
 
-The policy denies by default; only two things are allowed:
+The policy denies by default and allows exactly three requests:
 
 | Who                           | May do                                     |
 | ----------------------------- | ------------------------------------------ |
@@ -370,8 +370,7 @@ same, the manager role is the same, OPA allowed both, and only the clock moved.
 That is the property Vault is adding: *authorization with an expiry date*.
 
 Vault will not say which of expired / revoked / never-issued it was, because it
-does not disclose that to an unauthenticated caller. An expired token is simply
-gone.
+does not disclose that to an unauthenticated caller.
 
 ### Telling the denials apart
 
@@ -455,8 +454,8 @@ with `flush=True`, not a logging framework. The record it builds has this shape
 A single `POST /orders/delete` by a manager therefore leaves three lines (`token
 allow`, `policy allow`, `credential allow`), and a refusal leaves the prefix up to
 whichever gate closed. `subject` is the token's `preferred_username`, and `roles`
-carries `realm_access.roles`, which is the claim the policy actually turns on, so a
-deny is explicable from the log alone.
+carries `realm_access.roles`, which is the claim the policy turns on, so a deny
+is explicable from the log alone.
 
 **Tokens, credentials and keys are never logged.** The mint route records that a
 credential was issued and its TTL, not its value.
@@ -513,8 +512,8 @@ Keycloak session.
 4. **No second login prompt appears.** The page renders straight as **Demo
    Dashboard**, again showing `Signed in as Test User`.
 
-Step 4 is the whole point: the browser still bounces through Keycloak (watch the
-address bar flick through `localhost:8080`), but because the realm session cookie
+In step 4 the browser still bounces through Keycloak (watch the address bar
+flick through `localhost:8080`), but because the realm session cookie
 from step 1 is still valid, Keycloak issues a new assertion immediately instead of
 asking for credentials. It works in either order: start on 9002 and 9001 becomes
 the silent one.
@@ -529,7 +528,7 @@ back in silently.
 Browser cookies are scoped to a host, not a port, so `localhost:9001` and
 `localhost:9002` share one cookie jar. The apps therefore use distinct cookie
 names (`mock_docs_session`, `mock_dashboard_session`) and distinct secret keys.
-Without that, the second app would simply read the first app's session cookie and
+Without that, the second app would read the first app's session cookie and
 look logged in without ever contacting Keycloak, which would make the SSO demo
 prove nothing.
 
@@ -552,13 +551,16 @@ printing one `PASS` or `FAIL` line per check:
 ./verify.sh
 ```
 
-It confirms that every service is up, that the plaintext baseline is refused at
-the gateway, that Keycloak issues a token and the gateway answers 401 without one
-and 200 with one, that mutual TLS verifies between `gateway` and `orders` and
-that a caller presenting no client certificate is refused, that
-`opa test policies/ -v` passes, that OPA allows a manager and denies a
-non-manager on the identical endpoint, and that a freshly minted Vault credential
-is accepted inside its TTL.
+It checks that:
+
+- every service is up;
+- the plaintext baseline is refused at the gateway;
+- Keycloak issues a token, and the gateway answers 401 without one and 200 with one;
+- mutual TLS verifies between `gateway` and `orders`, and a caller presenting no
+  client certificate is refused;
+- `opa test policies/ -v` passes;
+- OPA allows a manager and denies a non-manager on the identical endpoint;
+- a freshly minted Vault credential is accepted inside its TTL.
 
 ```
 5. OPA policy unit tests
@@ -579,7 +581,7 @@ this file: `./certs/generate.sh` has been run, the stack is up, and `.env` holds
 a current `KEYCLOAK_CLIENT_SECRET`. A missing prerequisite is reported as a setup
 error with exit code `2`, which is deliberately distinct from a failed check.
 
-Note that the Vault check really does delete an order. `ORDERS` in
+The Vault check deletes an order. `ORDERS` in
 `orders/app.py` is an in-memory list, so once the three seeded orders have been
 spent the script restarts the `orders` service to reseed them, which keeps
 repeated runs working.
